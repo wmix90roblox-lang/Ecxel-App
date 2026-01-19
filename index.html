@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Application Excel Avancée – Attribution et Historique</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+body { font-family: Arial; padding: 20px; }
+button,input,select { margin: 5px; }
+table { border-collapse: collapse; margin-top: 15px; }
+td,th { border: 1px solid #ccc; padding: 5px 10px; text-align:center;}
+#preview { max-height:400px; overflow:auto; margin-top:10px;}
+.highlight { background-color: yellow; }
+#searchResults { margin-top:10px; border:1px solid #ccc; padding:5px; max-height:150px; overflow:auto; }
+</style>
+</head>
+<body>
+
+<h2>📊 Application Excel Avancée</h2>
+
+<h3>1️⃣ Importer un tableur</h3>
+<input type="file" id="fileInput" accept=".xlsx"><br>
+<label>Colonne des noms :</label>
+<select id="nameColumn">
+<option value="0">A</option>
+<option value="1">B</option>
+<option value="2">C</option>
+<option value="3">D</option>
+<option value="4">E</option>
+</select><br>
+<label>Liste des noms (séparés par virgule) :</label><br>
+<input type="text" id="nameList" style="width:60%" placeholder="Ex: Alice,Bob,Charlie"><br>
+<label>Couleur(s) à traiter :</label>
+<select id="colorSelect" multiple></select><br>
+<button onclick="loadExcel()">Charger Excel et attribuer</button>
+
+<h3>2️⃣ Historique des tableurs</h3>
+<select id="historySelect" onchange="showSelectedWorkbook()"></select>
+
+<h3>3️⃣ Recherche avancée par nom</h3>
+<input type="text" id="searchName" placeholder="Tapez un nom..." oninput="searchName()">
+<div id="searchResults"></div>
+
+<p id="status"></p>
+<div id="preview"></div>
+
+<script>
+/* ---------- VARIABLES ---------- */
+let tableurs = JSON.parse(localStorage.getItem('tableurs')||'[]');
+let currentWorkbook=null, currentSheet=null, currentMapping={}, colorMap={}, cellIndex={}, namesQueue=[], usedNames=[];
+
+/* ---------- UTILITAIRES ---------- */
+function shuffle(arr){for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}}
+function getCellColor(cell){if(!cell.s||!cell.s.fill||!cell.s.fill.fgColor)return null;const fg=cell.s.fill.fgColor;if(fg.rgb)return fg.rgb;if(fg.indexed!==undefined)return "INDEXED_"+fg.indexed;return null;}
+function refillNames(){if(namesQueue.length===0){namesQueue=[...usedNames];usedNames=[];shuffle(namesQueue);}}
+
+/* ---------- ESTHÉTIQUE ---------- */
+function beautifySheet(sheet){
+  const range=XLSX.utils.decode_range(sheet["!ref"]);
+  sheet["!cols"]=sheet["!cols"]||[]; sheet["!rows"]=sheet["!rows"]||[];
+  for(let c=range.s.c;c<=range.e.c;c++)sheet["!cols"][c]={wpx:120};
+  for(let r=range.s.r;r<=range.e.r;r++)sheet["!rows"][r]={hpx:24};
+  for(let r=range.s.r;r<=range.e.r;r++){
+    for(let c=range.s.c;c<=range.e.c;c++){
+      const addr=XLSX.utils.encode_cell({r,c});
+      const cell=sheet[addr];
+      if(!cell||!cell.v)continue;
+      cell.s=cell.s||{};
+      cell.s.alignment={horizontal:"center",vertical:"center",wrapText:true};
+      cell.s.font=cell.s.font||{}; cell.s.font.sz=11;
+    }
+  }
+}
+
+/* ---------- IMPORT & ATTRIBUTION MULTI-COULEURS ---------- */
+function loadExcel(){
+  const file=document.getElementById("fileInput").files[0];
+  if(!file)return alert("Veuillez sélectionner un fichier Excel.");
+  const nameCol=parseInt(document.getElementById("nameColumn").value);
+  const nameList=document.getElementById("nameList").value.split(",").map(s=>s.trim()).filter(s=>s);
+  if(nameList.length===0)return alert("Veuillez entrer la liste des noms.");
+
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const data=new Uint8Array(e.target.result);
+    const workbook=XLSX.read(data,{type:"array",cellStyles:true});
+    const sheet=workbook.Sheets[workbook.SheetNames[0]];
+    currentWorkbook=workbook; currentSheet=sheet;
+    namesQueue=[...nameList]; usedNames=[];
+    shuffle(namesQueue);
+    colorMap={}; cellIndex={}; currentMapping={};
+
+    const range=XLSX.utils.decode_range(sheet["!ref"]);
+    for(let r=range.s.r;r<=range.e.r;r++){
+      for(let c=range.s.c;c<=range.e.c;c++){
+        const addr=XLSX.utils.encode_cell({r,c});
+        const cell=sheet[addr];
+        if(!cell)continue;
+        const color=getCellColor(cell);
+        if(!color)continue;
+        if(!colorMap[color]){colorMap[color]=[];cellIndex[color]=0;}
+        colorMap[color].push(addr);
+      }
+    }
+    populateColorSelect();
+
+    // Attribution automatique sur toutes les couleurs sélectionnées
+    const selectedColors=Array.from(document.getElementById("colorSelect").selectedOptions).map(o=>o.value);
+    selectedColors.forEach(color=>{
+      if(!colorMap[color])return;
+      colorMap[color].forEach(addr=>{
+        refillNames();
+        const name=namesQueue.shift();
+        usedNames.push(name);
+        sheet[addr].v=name; sheet[addr].t="s";
+        currentMapping[addr]={name:name,color:color};
+      });
+    });
+
+    // Sauvegarde historique
+    const now=new Date().toLocaleString();
+    tableurs.push({date:now,filename:file.name,workbook,currentSheet,mapping:{...currentMapping}});
+    localStorage.setItem('tableurs',JSON.stringify(tableurs));
+    populateHistory();
+    beautifySheet(sheet);
+    renderPreview();
+    exportFinalExcel();
+    document.getElementById("status").innerText=`Tableur importé et noms attribués avec succès (${now})`;
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+/* ---------- COULEUR ---------- */
+function populateColorSelect(){
+  const sel=document.getElementById("colorSelect"); sel.innerHTML="";
+  Object.keys(colorMap).forEach(c=>{
+    const opt=document.createElement("option"); opt.value=c; opt.textContent=c;
+    sel.appendChild(opt);
+  });
+}
+
+/* ---------- HISTORIQUE ---------- */
+function populateHistory(){
+  const sel=document.getElementById("historySelect"); sel.innerHTML="";
+  tableurs.forEach((t,i)=>{
+    const opt=document.createElement("option"); opt.value=i;
+    opt.textContent=`${t.date} - ${t.filename}`;
+    sel.appendChild(opt);
+  });
+  if(tableurs.length>0){
+    currentWorkbook=tableurs[tableurs.length-1].workbook;
+    currentSheet=tableurs[tableurs.length-1].sheet;
+    currentMapping=tableurs[tableurs.length-1].mapping;
+  }
+}
+function showSelectedWorkbook(){
+  const sel=document.getElementById("historySelect"); const idx=parseInt(sel.value);
+  if(isNaN(idx))return;
+  currentWorkbook=tableurs[idx].workbook;
+  currentSheet=tableurs[idx].sheet;
+  currentMapping=tableurs[idx].mapping;
+  renderPreview();
+  searchName(); // met à jour surbrillance si nom déjà dans recherche
+}
+
+/* ---------- PRÉVISUALISATION ---------- */
+function renderPreview(){
+  if(!currentSheet)return;
+  const range=XLSX.utils.decode_range(currentSheet["!ref"]);
+  let html="<table>";
+  for(let r=range.s.r;r<=range.e.r;r++){
+    html+="<tr>";
+    for(let c=range.s.c;c<=range.e.c;c++){
+      const addr=XLSX.utils.encode_cell({r,c});
+      const val=currentMapping[addr]?.name||currentSheet[addr]?.v||"";
+      html+=`<td id="${addr}">${val}</td>`;
+    }
+    html+="</tr>";
+  }
+  html+="</table>";
+  document.getElementById("preview").innerHTML=html;
+}
+
+/* ---------- RECHERCHE AVANCÉE ---------- */
+function searchName(){
+  const search=document.getElementById("searchName").value.trim().toLowerCase();
+  const resultsDiv=document.getElementById("searchResults");
+  resultsDiv.innerHTML="";
+  if(!search || !currentMapping)return;
+
+  // Nettoyage surbrillance
+  Object.keys(currentMapping).forEach(addr=>{
+    const el=document.getElementById(addr); if(el)el.classList.remove("highlight");
+  });
+
+  let results=[];
+  Object.entries(currentMapping).forEach(([addr,obj])=>{
+    if(obj.name.toLowerCase().includes(search)){
+      const el=document.getElementById(addr); if(el)el.classList.add("highlight");
+      results.push({cell:addr,name:obj.name,color:obj.color});
+    }
+  });
+
+  if(results.length===0){resultsDiv.innerHTML="Aucun résultat.";}
+  else{
+    let html="<table><tr><th>Cellule</th><th>Nom</th><th>Couleur</th></tr>";
+    results.forEach(r=>html+=`<tr><td>${r.cell}</td><td>${r.name}</td><td>${r.color}</td></tr>`);
+    html+="</table>";
+    resultsDiv.innerHTML=html;
+  }
+}
+
+/* ---------- EXPORT FINAL ---------- */
+function exportFinalExcel(){
+  if(!currentWorkbook)return;
+  beautifySheet(currentSheet);
+
+  // Surligner dans Excel les résultats de recherche
+  const search=document.getElementById("searchName").value.trim().toLowerCase();
+  if(search){
+    Object.entries(currentMapping).forEach(([addr,obj])=>{
+      if(obj.name.toLowerCase().includes(search)){
+        currentSheet[addr].s=currentSheet[addr].s||{};
+        currentSheet[addr].s.fill={fgColor:{rgb:"FFFF00"}}; // surbrillance jaune
+      }
+    });
+  }
+
+  const out=XLSX.write(currentWorkbook,{bookType:"xlsx",type:"array",cellStyles:true});
+  const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="tableau_final.xlsx"; a.click();
+}
+
+populateHistory(); // initialisation historique
+</script>
+
+</body>
+</html>
