@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Excel Mapping App</title>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --bg: #0d0f14;
+  --panel: #161a22;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #c7a17a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* HEADER */
+header {
+  padding: 30px 60px;
+  display: flex;
+  gap: 30px;
+  align-items: center;
+}
+
+header input {
+  background: var(--panel);
+  border: none;
+  padding: 12px 16px;
+  color: var(--text);
+  border-radius: 8px;
+}
+
+/* MAIN LAYOUT */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  gap: 40px;
+  padding: 40px 60px;
+}
+
+/* PANELS */
+.panel {
+  background: var(--panel);
+  border-radius: 14px;
+  padding: 25px;
+}
+
+.panel h3 {
+  margin-top: 0;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+/* CENTER TOOL */
+.tool input, .tool select, .tool button {
+  width: 100%;
+  margin-top: 15px;
+  padding: 14px;
+  border-radius: 8px;
+  border: none;
+}
+
+.tool button {
+  background: var(--accent);
+  color: black;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* RESULT */
+.result {
+  margin-top: 20px;
+  color: var(--muted);
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <input type="text" placeholder="🔍 Rechercher un nom...">
+  <input type="date">
+</header>
+
+<div class="main">
+
+  <!-- HISTORIQUE ENTRÉE -->
+  <div class="panel">
+    <h3>📥 Tableurs importés</h3>
+    <p class="muted">Historique des fichiers envoyés</p>
+    <ul id="historyInput"></ul>
+  </div>
+
+  <!-- OUTIL CENTRAL -->
+  <div class="panel tool">
+    <h3>⚙️ Traitement du tableur</h3>
+
+    <input type="file" id="mainExcel" accept=".xlsx">
+    <input type="file" id="namesExcel" accept=".xlsx">
+
+    <select id="colorChoice">
+      <option value="FFFF00">Jaune</option>
+      <option value="00FF00">Vert</option>
+      <option value="FF0000">Rouge</option>
+      <option value="00B0F0">Bleu</option>
+    </select>
+
+    <button onclick="processExcel()">Exécuter le programme</button>
+
+    <div class="result" id="result">Aucun fichier généré</div>
+  </div>
+
+  <!-- HISTORIQUE SORTIE -->
+  <div class="panel">
+    <h3>📤 Tableurs générés</h3>
+    <p class="muted">Résultats produits par le programme</p>
+    <ul id="historyOutput"></ul>
+  </div>
+
+</div>
+
+<script>
+let workbook, names = [];
+
+document.getElementById("mainExcel").addEventListener("change", e => {
+  document.getElementById("historyInput").innerHTML += `<li>${e.target.files[0].name}</li>`;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    workbook = XLSX.read(ev.target.result, { type: "binary", cellStyles: true });
+  };
+  reader.readAsBinaryString(e.target.files[0]);
+});
+
+document.getElementById("namesExcel").addEventListener("change", e => {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const wb = XLSX.read(ev.target.result, { type: "binary" });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    names = XLSX.utils.sheet_to_json(sheet, { header: 1 }).flat().filter(Boolean);
+  };
+  reader.readAsBinaryString(e.target.files[0]);
+});
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+}
+
+function processExcel() {
+  if (!workbook || names.length === 0) return;
+
+  shuffle(names);
+  let i = 0;
+  const color = document.getElementById("colorChoice").value;
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+  Object.keys(sheet).forEach(cell => {
+    if (!cell.startsWith("!") && sheet[cell].s?.fill?.fgColor?.rgb === color) {
+      sheet[cell].v = names[i++ % names.length];
+    }
+  });
+
+  XLSX.writeFile(workbook, "tableau_genere.xlsx");
+  document.getElementById("result").innerText = "✅ Tableau généré : tableau_genere.xlsx";
+  document.getElementById("historyOutput").innerHTML += `<li>tableau_genere.xlsx</li>`;
+}
+</script>
+
+</body>
+</html>
